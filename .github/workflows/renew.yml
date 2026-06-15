@@ -15,40 +15,44 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
-    - uses: actions/checkout@v5
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v5
-      with:
-        node-version: '20'
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
 
-    - name: Install Dependencies
-      run: |
-        npm install
-        npx playwright install chromium   # 下载 Playwright 内置浏览器
+      - name: Install dependencies
+        run: |
+          npm install
+          npx playwright install chromium
 
-    - name: Run Renew Script
-      env:
-        USERS_JSON: ${{ secrets.USERS_JSON }}
-        HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
-        TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        TG_THREAD_ID: ${{ secrets.TG_THREAD_ID }}
-      # 直接运行，不再需要 xvfb-run
-      run: node action_renew.js
+      - name: Run renewal script
+        env:
+          USERS_JSON: ${{ secrets.USERS_JSON }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_THREAD_ID: ${{ secrets.TG_THREAD_ID }}
+        run: node action_renew.js
 
-    - name: Commit Renew Dates
-      if: always()
-      run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-        git add renew_dates.json || true
-        git diff --cached --quiet renew_dates.json || git commit -m "chore: update renew dates [skip ci]"
-        git push || true
+      - name: Commit renew dates (if file exists)
+        if: always()
+        run: |
+          if [ -f renew_dates.json ]; then
+            git config --global user.name 'github-actions[bot]'
+            git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+            git add renew_dates.json
+            git diff --cached --quiet renew_dates.json || git commit -m "chore: update renew dates [skip ci]"
+            git push || true
+          else
+            echo "renew_dates.json not found, skipping commit"
+          fi
 
-    - name: Upload Screenshots
-      if: always()
-      uses: actions/upload-artifact@v5
-      with:
-        name: screenshots
-        path: screenshots/
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: screenshots
+          path: screenshots/
