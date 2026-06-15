@@ -753,7 +753,7 @@ async function solveAltchaIfPresent(page, stageName = "Renew阶段", maxAttempts
             await page.waitForTimeout(3000); 
 
             // ➡️ 【登录阶段专属】：解决 Turnstile
-            await solveTurnstileIfPresent(page, "登录阶段", 10, 5000);
+            await solveTurnstileIfPresent(page, "登录阶段", 15, 25000);
 
             console.log('正在输入凭据...');
             try {
