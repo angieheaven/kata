@@ -3,7 +3,6 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const http = require('http');
 
 const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
@@ -77,8 +76,6 @@ async function sendTelegramMessage(message, imagePath = null) {
 
 chromium.use(stealth);
 
-const CHROME_PATH = process.env.CHROME_PATH || '/usr/bin/google-chrome';
-const DEBUG_PORT = 9222;
 const VIEWPORT_WIDTH = 1280;
 const VIEWPORT_HEIGHT = 720;
 const RENEW_MAX_ATTEMPTS = 3;
@@ -176,56 +173,46 @@ async function checkProxy() {
     }
 }
 
-function checkPort(port) {
-    return new Promise((resolve) => {
-        const req = http.get(`http://localhost:${port}/json/version`, (res) => {
-            res.resume();
-            resolve(true);
-        });
-        req.on('error', () => resolve(false));
-        req.setTimeout(3000, () => {
-            req.destroy();
-            resolve(false);
-        });
-    });
-}
+// ========== 修改点1：重写 launchChrome 使用 Playwright 直接启动 ==========
+let browserInstance = null;  // 保存浏览器实例
 
 async function launchChrome() {
-    console.log('检查 Chrome 是否已在端口 ' + DEBUG_PORT + ' 上运行...');
-    if (await checkPort(DEBUG_PORT)) {
-        console.log('Chrome 已开启。');
+    console.log('正在通过 Playwright 启动浏览器...');
+    if (browserInstance && browserInstance.isConnected()) {
+        console.log('浏览器已运行，复用现有实例。');
         return;
     }
-    console.log(`正在启动 Chrome (路径: ${CHROME_PATH})...`);
-    const args = [
-        `--remote-debugging-port=${DEBUG_PORT}`,
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-gpu',
-        `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--user-data-dir=/tmp/chrome_user_data',
-        '--disable-dev-shm-usage'
-    ];
+
+    const launchOptions = {
+        headless: true,  // CI 环境无头运行
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`
+        ]
+    };
+
+    // 如果配置了代理，添加到 launch 参数中
     if (PROXY_CONFIG) {
-        args.push(`--proxy-server=${PROXY_CONFIG.server}`);
-        args.push('--proxy-bypass-list=<-loopback>');
+        launchOptions.proxy = {
+            server: PROXY_CONFIG.server,
+            username: PROXY_CONFIG.username,
+            password: PROXY_CONFIG.password
+        };
+        console.log(`[代理] 已为浏览器配置代理: ${PROXY_CONFIG.server}`);
     }
-    const chrome = spawn(CHROME_PATH, args, {
-        detached: true,
-        stdio: 'ignore'
-    });
-    chrome.unref();
-    console.log('正在等待 Chrome 初始化...');
-    for (let i = 0; i < 20; i++) {
-        if (await checkPort(DEBUG_PORT)) break;
-        await new Promise(r => setTimeout(r, 1000));
-    }
-    if (!await checkPort(DEBUG_PORT)) {
+
+    try {
+        browserInstance = await chromium.launch(launchOptions);
+        console.log('浏览器启动成功。');
+    } catch (error) {
+        console.error('浏览器启动失败:', error);
         throw new Error('Chrome 启动失败');
     }
 }
+// ========== 修改结束 ==========
 
 async function configurePageViewport(page) {
     try {
@@ -688,33 +675,22 @@ async function solveAltchaIfPresent(page, stageName = "Renew阶段", maxAttempts
         if (!await checkProxy()) process.exit(1);
     }
 
+    // 启动浏览器（使用 Playwright launch）
     await launchChrome();
-
-    console.log(`正在连接 Chrome...`);
-    let browser;
-    for (let k = 0; k < 5; k++) {
-        try {
-            browser = await chromium.connectOverCDP(`http://localhost:${DEBUG_PORT}`);
-            console.log('连接成功！');
-            break;
-        } catch (e) {
-            console.log(`连接尝试 ${k + 1} 失败。2秒后重试...`);
-            await new Promise(r => setTimeout(r, 2000));
-        }
-    }
-    if (!browser) process.exit(1);
-
-    const context = browser.contexts()[0];
-    if (!context) {
-        console.error('无法获取浏览器上下文，退出。');
-        await browser.close();
+    const browser = browserInstance;  // 直接使用启动好的实例
+    if (!browser) {
+        console.error('浏览器启动失败，退出。');
         process.exit(1);
     }
-    let page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
-    page.setDefaultTimeout(60000);
-    await configurePageViewport(page);
 
-    // --- 代理认证处理 ---
+    // 获取或创建 context
+    let context = browser.contexts()[0];
+    if (!context) {
+        context = await browser.newContext();
+        console.log('创建新的浏览器上下文。');
+    }
+
+    // 代理认证处理（虽然 launch 时已配置 proxy，但为了保证每个请求的 header，保留原有 route 逻辑）
     if (PROXY_CONFIG && PROXY_CONFIG.username) {
         console.log('[代理] 设置认证拦截...');
         await context.route('**/*', (route) => {
@@ -727,6 +703,9 @@ async function solveAltchaIfPresent(page, stageName = "Renew阶段", maxAttempts
         });
     }
 
+    let page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+    page.setDefaultTimeout(60000);
+    await configurePageViewport(page);
     await page.addInitScript(INJECTED_SCRIPT);
 
     for (let i = 0; i < users.length; i++) {
