@@ -24,7 +24,7 @@ jobs:
 
     - name: Install Dependencies
       run: |
-        npm ci  # 或 npm install
+        npm install
         npx playwright install chromium   # 下载 Playwright 内置浏览器
 
     - name: Run Renew Script
